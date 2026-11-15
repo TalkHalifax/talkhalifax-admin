@@ -1,0 +1,7 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "paths": { "@platform/admin-api": ["./.platform/src/routes/admin-api.ts"] }
+  },
+  "include": ["src", "test/contract.ts"]
+}

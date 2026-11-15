@@ -1,0 +1,163 @@
+# Deploys the admin site (the talkhalifax-admin Worker) to Cloudflare on every push to main, and on demand from main only.
+# Pull requests get the checks only. A failed check stops the deploy. A failed check after the deploy rolls it back.
+#
+# Needs one secret, in the production environment only (never a repository secret): CLOUDFLARE_API_TOKEN, a Cloudflare
+# API token with Account > Workers Scripts > Edit and nothing else. No D1: the admin Worker has no database. The editor
+# sets it at the cutover. Until then the deploy job finds no token, says so, and deploys nothing. Only the Deploy and
+# Roll back steps ever see the token.
+# The account id and the Worker's name are in wrangler.jsonc. The platform it reads is TalkHalifax/talkhalifax.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Pull request runs: a newer push cancels the older run. Everything else (main): one at a time, never cancelled mid-deploy.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  WRANGLER_SEND_METRICS: "false"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The platform at main, read-only, for the guard drift check, the contract check and the browser check.
+      # The repo is public, so this needs no token.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: TalkHalifax/talkhalifax
+          ref: main
+          path: .platform
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Type check
+        run: npx tsc --noEmit
+      - name: Type check the tests
+        run: npx tsc -p test
+      - name: Client script parses
+        run: node --check public/admin.js
+      - name: Unit tests
+        run: npm test
+      - name: Agent guard tests
+        run: npm run test:hooks
+      # The guard and the drafts tooling are byte-for-byte copies of the public repo's. Any difference fails. Divergence
+      # only by change request. Agent definitions and policies aren't compared: each repo's are its own.
+      - name: Agent guard and drafts tooling match the public repo's
+        run: |
+          diff -r .claude/hooks .platform/.claude/hooks
+          diff .claude/settings.json .platform/.claude/settings.json
+          diff .claude/agents/policy/README.md .platform/.claude/agents/policy/README.md
+          diff test/hooks/agent-guard.test.mjs .platform/test/hooks/agent-guard.test.mjs
+          diff test/hooks/agent-guard-worktrees.test.mjs .platform/test/hooks/agent-guard-worktrees.test.mjs
+          diff -r test/hooks/fixtures .platform/test/hooks/fixtures
+          diff test/hooks/promote-agent-drafts.test.mjs .platform/test/hooks/promote-agent-drafts.test.mjs
+          diff test/hooks/promote-protected-drafts.test.mjs .platform/test/hooks/promote-protected-drafts.test.mjs
+          diff scripts/promote-agent-drafts.mjs .platform/scripts/promote-agent-drafts.mjs
+          diff scripts/promote-protected-drafts.mjs .platform/scripts/promote-protected-drafts.mjs
+          diff agent-drafts/README.md .platform/agent-drafts/README.md
+          diff protected-drafts/README.md .platform/protected-drafts/README.md
+      # Drafts of protected files must be promoted (npm run drafts:promote) before they reach main
+      - name: No unpromoted drafts
+        run: test -z "$(git ls-files protected-drafts | grep -v '^protected-drafts/README.md$')"
+      # The admin code, type-checked against the platform's real AdminApi at main, and the copy in src/ checked against it
+      - name: Contract check
+        run: npm run check:contract
+      # The admin site in a real browser (the runner's Chrome), bound to a local platform Worker (the public repo at main)
+      # with throwaway data
+      - name: Browser check
+        run: npm run test:e2e
+
+  deploy:
+    needs: check
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    steps:
+      # Until the cutover the production environment has no token, and the main repo still deploys this Worker.
+      # Setting the token is the switch: before it, say so, deploy nothing and stay green. Only "true" or "false" reaches
+      # this step, never the token.
+      - name: Is the deploy token set yet?
+        id: token
+        env:
+          TOKEN_SET: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+        run: |
+          if [ "$TOKEN_SET" = "true" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::The production environment has no CLOUDFLARE_API_TOKEN yet, so nothing was deployed. The editor sets it at the cutover."
+          fi
+      - if: steps.token.outputs.ready == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - if: steps.token.outputs.ready == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+      - if: steps.token.outputs.ready == 'true'
+        run: npm ci
+      - name: Deploy
+        if: steps.token.outputs.ready == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: npx wrangler deploy
+      # A 200 without signing in would mean the admin site is open to anyone. 5xx, no answer or "not set up" means it's
+      # down or nobody can sign in. A redirect, 401 or 403 is the front door working (the password door or Access).
+      # Its own timeout, so a hang fails this step (and rolls back) instead of cancelling the job (which wouldn't).
+      - name: Check the admin site refuses strangers and its front door works
+        id: smoke
+        if: steps.token.outputs.ready == 'true'
+        timeout-minutes: 8
+        run: |
+          B=https://admin.talkhalifax.ca
+          code() { curl -s -o /dev/null -m 20 -w '%{http_code}' "$B$1" || true; }
+          check() {
+            for path in / /admin.js /api/users /api/summary; do
+              c=$(code "$path")
+              echo "admin.talkhalifax.ca$path answered HTTP $c"
+              case "$c" in
+                200) echo "::error::The admin site answered $path without a sign-in. Check its sign-in."; return 2 ;;
+                301|302|303|401|403) ;;
+                *) return 1 ;;
+              esac
+            done
+            c=$(code /login)
+            echo "admin.talkhalifax.ca/login answered HTTP $c"
+            case "$c" in
+              200) curl -sf -m 20 "$B/login" | grep -q 'action="/login"' || return 1 ;;
+              302|401|403) ;;
+              *) return 1 ;;
+            esac
+          }
+          for i in 1 2 3 4 5; do
+            if check; then echo "The admin site is up and refuses strangers"; exit 0; else r=$?; fi
+            if [ "$r" = 2 ]; then exit 1; fi
+            echo "Attempt $i failed"; sleep 10
+          done
+          echo "::error::The admin site didn't answer as expected after the deploy."
+          exit 1
+      # --yes and --message: rollback runs without asking (both listed by wrangler 4.158.0's rollback --help)
+      - name: Roll back
+        if: failure() && steps.smoke.outcome == 'failure'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: npx wrangler rollback --yes --message "Post-deploy check failed for ${GITHUB_SHA::7}"

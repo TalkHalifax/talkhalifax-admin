@@ -7,7 +7,7 @@ import {
   clearedCookie, cookieValue, loginPage, newSession, PasswordEnv, passwordReady, readForm, rightCredentials,
   SESSION_COOKIE, sessionCookie, validSession,
 } from "./password";
-import type { AdminApi, ContentArgs, ContentScreen, ContentStatus, Range, UserRole, UsersArgs } from "../../src/routes/admin-api";
+import type { AdminApi, ContentArgs, ContentScreen, ContentStatus, Range, UserRole, UsersArgs } from "@platform/admin-api";
 
 export interface AdminEnv extends PasswordEnv {
   /** The platform's read-only admin data: a service binding to the main Worker's AdminApi entrypoint. The only way in to it. */

@@ -1,9 +1,9 @@
-// The admin Worker as the browser check runs it: admin/wrangler.jsonc, with PLATFORM bound to the test Worker's AdminApi.
+// The admin Worker as the browser check runs it: wrangler.jsonc, with PLATFORM bound to the local platform Worker's AdminApi (.platform/test/wrangler.test.jsonc).
 {
   "name": "talkhalifax-admin-test",
-  "main": "../admin/src/index.ts",
+  "main": "../src/index.ts",
   "compatibility_date": "2026-10-01",
-  "assets": { "directory": "../admin/public", "binding": "ASSETS", "run_worker_first": true },
+  "assets": { "directory": "../public", "binding": "ASSETS", "run_worker_first": true },
   "services": [{ "binding": "PLATFORM", "service": "talkhalifax-test", "entrypoint": "AdminApi" }],
   "vars": { "ADMIN_DEV": "1" }
 }

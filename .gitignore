@@ -1,0 +1,7 @@
+node_modules/
+.wrangler/
+.platform/
+.dev.vars*
+.env*
+.claude/worktrees/
+.agent-tmp/

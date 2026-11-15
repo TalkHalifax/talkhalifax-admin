@@ -3,7 +3,7 @@
 // ADMIN_PASSWORD secrets), or Cloudflare Access once that's set up. Its address (admin.talkhalifax.ca) is a custom
 // domain set in the dashboard, like the main site's.
 {
-  "$schema": "../node_modules/wrangler/config-schema.json",
+  "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "talkhalifax-admin",
   "account_id": "5b365e1eb102c26b07e110dae02fbfa9",
   "main": "src/index.ts",

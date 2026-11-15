@@ -1,0 +1,8 @@
+// The admin Worker as the unit tests run it: no PLATFORM (each test passes its own stand-in), no assets, no rate limit.
+// nodejs_compat is for the test runner only. The real config (wrangler.jsonc) doesn't need it.
+{
+  "name": "talkhalifax-admin-unit",
+  "main": "../src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"]
+}
